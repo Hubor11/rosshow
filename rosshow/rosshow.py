@@ -88,6 +88,7 @@ def capture_key_loop(viewer):
 def _print_usage():
     print("Usage: rosshow [options] <topic>")
     print("       rosshow --from-rviz <config.rviz> [options]")
+    print("       rosshow --nav [topics]")
     print("")
     print("Single-topic mode:")
     print("   rosshow <topic>")
@@ -96,6 +97,12 @@ def _print_usage():
     print("   rosshow --from-rviz <config.rviz>")
     print("   rosshow --from-rviz <config.rviz> --tmux-script out.sh")
     print("   rosshow --from-rviz <config.rviz> --list")
+    print("")
+    print("Navigation mode (visualize path planning):")
+    print("   rosshow --nav")
+    print("   rosshow --nav --global /move_base/GlobalPlanner/plan")
+    print("   rosshow --nav --local /move_base/TebLocalPlannerROS/local_plan")
+    print("   rosshow --nav --odom /odom --scan /scan --goal /move_base_simple/goal")
     print("")
     print("Options:")
     print("   -a, --ascii        Use ASCII only (no Unicode)")
@@ -107,6 +114,12 @@ def _print_usage():
     print("   --from-rviz FILE   Load displays from an rviz config file")
     print("   --tmux-script FILE Generate a tmux script instead of inline display")
     print("   --list             List parsed displays and exit")
+    print("   --nav              Navigation mode: visualize path planning")
+    print("   --global TOPIC     Global path topic (default: /move_base/GlobalPlanner/plan)")
+    print("   --local TOPIC      Local path topic (default: /move_base/local_plan)")
+    print("   --odom TOPIC       Odometry topic (default: /odom)")
+    print("   --scan TOPIC       Laser scan topic (default: /scan)")
+    print("   --goal TOPIC       Goal pose topic (default: /move_base_simple/goal)")
     sys.exit(0)
 
 
@@ -120,6 +133,12 @@ def _parse_args():
         "from_rviz": None,
         "tmux_script": None,
         "list_only": False,
+        "navigation_mode": False,
+        "nav_global_topic": "/move_base/GlobalPlanner/plan",
+        "nav_local_topic": "/move_base/local_plan",
+        "nav_odom_topic": "/odom",
+        "nav_scan_topic": "/scan",
+        "nav_goal_topic": "/move_base_simple/goal",
     }
 
     if len(sys.argv) < 2:
@@ -155,6 +174,38 @@ def _parse_args():
             args["tmux_script"] = sys.argv[i]
         elif arg == "--list":
             args["list_only"] = True
+        elif arg == "--nav":
+            args["navigation_mode"] = True
+        elif arg == "--global":
+            i += 1
+            if i >= len(sys.argv):
+                print("Error: --global requires a topic name")
+                sys.exit(1)
+            args["nav_global_topic"] = sys.argv[i]
+        elif arg == "--local":
+            i += 1
+            if i >= len(sys.argv):
+                print("Error: --local requires a topic name")
+                sys.exit(1)
+            args["nav_local_topic"] = sys.argv[i]
+        elif arg == "--odom":
+            i += 1
+            if i >= len(sys.argv):
+                print("Error: --odom requires a topic name")
+                sys.exit(1)
+            args["nav_odom_topic"] = sys.argv[i]
+        elif arg == "--scan":
+            i += 1
+            if i >= len(sys.argv):
+                print("Error: --scan requires a topic name")
+                sys.exit(1)
+            args["nav_scan_topic"] = sys.argv[i]
+        elif arg == "--goal":
+            i += 1
+            if i >= len(sys.argv):
+                print("Error: --goal requires a topic name")
+                sys.exit(1)
+            args["nav_goal_topic"] = sys.argv[i]
         elif arg == "-h" or arg == "--help":
             _print_usage()
         elif arg.startswith("-"):
@@ -163,10 +214,10 @@ def _parse_args():
             positional.append(arg)
         i += 1
 
-    if args["from_rviz"] is None and len(positional) > 0:
+    if args["from_rviz"] is None and not args["navigation_mode"] and len(positional) > 0:
         args["topic"] = positional[0]
 
-    if args["from_rviz"] is None and args["topic"] is None:
+    if args["from_rviz"] is None and not args["navigation_mode"] and args["topic"] is None:
         _print_usage()
 
     return args
@@ -299,10 +350,70 @@ def _run_draw_loop(canvas, viewer):
         sys.stdout.flush()
 
 
+def _run_navigation(args):
+    from rosshow.viewers.nav_msgs.NavigationViewer import NavigationViewer
+
+    rospy.init_node('rosshow_nav', anonymous=True)
+
+    time.sleep(1)
+    topic_types = dict(rospy.get_published_topics())
+
+    canvas = termgraphics.TermGraphics(
+        mode=(termgraphics.MODE_EASCII if args["use_ascii"] else termgraphics.MODE_UNICODE),
+        color_support=args["color_support"])
+
+    viewer = NavigationViewer(canvas, title="Navigation")
+
+    kwargs = _get_qos_kwargs(args["qos_reliable"], args["qos_transient_local"])
+
+    if args["nav_global_topic"] in topic_types:
+        from nav_msgs.msg import Path
+        rospy.Subscriber(args["nav_global_topic"], Path, viewer.update_global_path, **kwargs)
+        print("Subscribed to global path: {}".format(args["nav_global_topic"]))
+    else:
+        print("Warning: global path topic {} not published".format(args["nav_global_topic"]))
+
+    if args["nav_local_topic"] in topic_types:
+        from nav_msgs.msg import Path
+        rospy.Subscriber(args["nav_local_topic"], Path, viewer.update_local_path, **kwargs)
+        print("Subscribed to local path: {}".format(args["nav_local_topic"]))
+    else:
+        print("Warning: local path topic {} not published".format(args["nav_local_topic"]))
+
+    if args["nav_odom_topic"] in topic_types:
+        from nav_msgs.msg import Odometry
+        rospy.Subscriber(args["nav_odom_topic"], Odometry, viewer.update_odometry, **kwargs)
+        print("Subscribed to odometry: {}".format(args["nav_odom_topic"]))
+    else:
+        print("Warning: odometry topic {} not published".format(args["nav_odom_topic"]))
+
+    if args["nav_scan_topic"] in topic_types:
+        from sensor_msgs.msg import LaserScan
+        rospy.Subscriber(args["nav_scan_topic"], LaserScan, viewer.update_laserscan, **kwargs)
+        print("Subscribed to laser scan: {}".format(args["nav_scan_topic"]))
+    else:
+        print("Warning: laser scan topic {} not published".format(args["nav_scan_topic"]))
+
+    if args["nav_goal_topic"] in topic_types:
+        from geometry_msgs.msg import PoseStamped
+        rospy.Subscriber(args["nav_goal_topic"], PoseStamped, viewer.update_goal, **kwargs)
+        print("Subscribed to goal: {}".format(args["nav_goal_topic"]))
+    else:
+        print("Warning: goal topic {} not published".format(args["nav_goal_topic"]))
+
+    thread = threading.Thread(target=capture_key_loop, args=(viewer,))
+    thread.daemon = True
+    thread.start()
+
+    _run_draw_loop(canvas, viewer)
+
+
 def main():
     args = _parse_args()
 
-    if args["from_rviz"]:
+    if args["navigation_mode"]:
+        _run_navigation(args)
+    elif args["from_rviz"]:
         from rosshow.rviz_config import parse_rviz_config, get_supported_displays, generate_tmux_script
 
         try:
